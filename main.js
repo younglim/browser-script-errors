@@ -15,6 +15,28 @@ function getISOTime() {
   return new Date().toISOString();
 }
 
+async function getModifiedUserAgentContext({ headless = true, devtools = false } = {}) {
+  // Step 1: Get default UA using a temp context
+  const tempBrowser = await chromium.launch();
+  const tempContext = await tempBrowser.newContext();
+  const tempPage = await tempContext.newPage();
+  const defaultUA = await tempPage.evaluate(() => navigator.userAgent);
+  await tempBrowser.close();
+
+  // Step 2: Modify UA if it includes HeadlessChrome
+  const modifiedUA = defaultUA.includes('HeadlessChrome')
+    ? defaultUA.replace('HeadlessChrome', 'Chrome')
+    : defaultUA;
+
+  // Step 3: Launch browser with devtools/headless settings
+  const browser = await chromium.launch({ headless, devtools });
+
+  // Step 4: Create a context with the modified UA
+  const context = await browser.newContext({ userAgent: modifiedUA });
+
+  return { browser, context, userAgent: modifiedUA };
+}
+
 (async () => {
   const urlToScan = process.argv[2];
   if (!urlToScan) {
@@ -22,20 +44,25 @@ function getISOTime() {
     process.exit(1);
   }
 
-  const headlessArg = process.argv[3];
-  const isHeadless = !(headlessArg && headlessArg.toLowerCase() === 'headless=false');
+  const args = process.argv.slice(2); // [urlToScan, arg3?, arg4?]
 
-  const timeoutArg = process.argv[4];
-  const timeoutMatch = timeoutArg && timeoutArg.match(/^timeout=(\d+)$/);
-  const timeout = timeoutMatch ? parseInt(timeoutMatch[1], 10) : 10000; // default 10000ms
+  // Defaults
+  let isHeadless = true;
+  let timeout = 10000;
 
-  const browser = await chromium.launch({
+  for (const arg of args.slice(1)) { // Skip URL
+    if (/^headless=false$/i.test(arg)) {
+      isHeadless = false;
+    } else if (/^timeout=\d+$/.test(arg)) {
+      timeout = parseInt(arg.split('=')[1], 10);
+    }
+  }
+
+  const { browser, context } = await getModifiedUserAgentContext({
     headless: isHeadless,
     devtools: !isHeadless,
   });
-  
-  
-  const context = await browser.newContext();
+
   const page = await context.newPage();
 
   const consoleErrorsArr = [];
