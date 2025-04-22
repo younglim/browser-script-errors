@@ -18,81 +18,132 @@ function getISOTime() {
 (async () => {
   const urlToScan = process.argv[2];
   if (!urlToScan) {
-    console.error('Usage: node scanSite.js <url>');
+    console.error('Usage: node main.js <url>');
     process.exit(1);
   }
 
-  const browser = await chromium.launch();
+  const browser = await chromium.launch({
+      headless: false,  
+      devtools: true, // open the browser’s devtools panel 
+  });
+  
   const context = await browser.newContext();
   const page = await context.newPage();
 
-  const resourceErrors = [];
-  const resourceWarnings = [];
-  let mainResponseStatus = '';
-
+  const allErrors = [];
+  const allWarnings = [];
   const scanTime = getISOTime();
 
+  let finalUrl = urlToScan;
+  let mainResponseStatus = 'unknown';
+  let lastMainFrameResponse = null;
+
+  // Buffer all errors and warnings (filter later)
   page.on('console', msg => {
     const type = msg.type();
-    if (type === 'error') {
-      resourceErrors.push({
-        errorType: 'jsError',
+    if (type === 'error' || type === 'warning') {
+      const loc = msg.location(); // { url, lineNumber, columnNumber }
+  
+      allErrors.push({
+        type,
+        location: loc.url || 'unknown',
+        line: loc.lineNumber ?? 0,
         message: msg.text(),
         timestamp: getISOTime(),
+        url: page.url(),
       });
-    } else if (type === 'warning') {
-      resourceWarnings.push({
-        warningType: 'jsWarning',
-        message: msg.text(),
+    }
+  });  
+
+  page.on('requestfailed', request => {
+    const errorText = request.failure()?.errorText || '';
+    if (!errorText.includes('ERR_ABORTED')) {
+      allErrors.push({
+        type: 'requestFailed',
+        message: `${request.url()} - ${errorText}`,
         timestamp: getISOTime(),
+        url: request.url(),
       });
     }
   });
 
-  page.on('requestfailed', request => {
-    resourceErrors.push({
-      errorType: 'requestFailed',
-      message: `${request.url()} - ${request.failure().errorText}`,
-      timestamp: getISOTime(),
-    });
-  });
-
   page.on('response', response => {
-    const status = response.status();
     const url = response.url();
+    const status = response.status();
+    const request = response.request();
+
+    if (request.frame() === page.mainFrame() && request.resourceType() === 'document') {
+      lastMainFrameResponse = response;
+    }
 
     if (status >= 500) {
-      resourceErrors.push({
-        errorType: 'resourceResponseError',
+      allErrors.push({
+        type: 'resourceResponseError',
         statusCode: status.toString(),
         message: `${url} - Status: ${status}`,
         timestamp: getISOTime(),
+        url,
       });
     } else if (status >= 300) {
-      resourceWarnings.push({
-        warningType: 'resourceResponseWarning',
+      allWarnings.push({
+        type: 'resourceResponseWarning',
         statusCode: status.toString(),
         message: `${url} - Status: ${status}`,
         timestamp: getISOTime(),
+        url,
       });
     }
   });
 
   try {
-    const response = await page.goto(urlToScan, { waitUntil: 'domcontentloaded' });
-    if (response) {
-      mainResponseStatus = response.status().toString();
+    await page.goto(urlToScan, { waitUntil: 'domcontentloaded' });
+
+    for (let i = 0; i < 5; i++) {
+      const previousUrl = finalUrl;
+      finalUrl = page.url();
+
+      const nav = page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 10000 }).catch(() => null);
+      await Promise.race([nav, page.waitForTimeout(10000)]);
+
+      if (finalUrl === previousUrl) break;
     }
-    console.log('Scan complete.');
+
+    await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
+    mainResponseStatus = lastMainFrameResponse?.status()?.toString() || 'unknown';
+    console.log(`Resolved final URL: ${finalUrl} (status: ${mainResponseStatus})`);
+
   } catch (err) {
-    resourceErrors.push({
-      errorType: 'navigationError',
+    allErrors.push({
+      type: 'navigationError',
       message: err.message,
       timestamp: getISOTime(),
+      url: finalUrl,
     });
   }
 
   await browser.close();
+
+  // Only include errors matching final origin
+  const finalOrigin = new URL(finalUrl).origin;
+  const consoleErrors = allErrors.filter(e => new URL(e.url).origin === finalOrigin).map(e => {
+    return {
+      errorType: e.type,
+      location: e.location,
+      line: e.line,
+      message: e.message,
+      timestamp: e.timestamp,
+      ...(e.statusCode && { statusCode: e.statusCode }),
+      url: e.url,
+    };
+  });
+
+  const resourceWarnings = allWarnings.filter(e => new URL(e.url).origin === finalOrigin).map(e => ({
+    warningType: e.type,
+    message: e.message,
+    timestamp: e.timestamp,
+    statusCode: e.statusCode,
+    url: e.url,
+  }));
 
   const parsedUrl = new URL(urlToScan);
   const domain = sanitizeFilename(parsedUrl.hostname);
@@ -106,9 +157,10 @@ function getISOTime() {
 
   const output = {
     url: urlToScan,
+    finalUrl,
     scanTime,
     ...(mainResponseStatus && { statusCode: mainResponseStatus }),
-    resourceErrors,
+    consoleErrors,
     resourceWarnings,
   };
 
