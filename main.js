@@ -38,8 +38,8 @@ function getISOTime() {
   const context = await browser.newContext();
   const page = await context.newPage();
 
-  const allErrors = [];
-  const allWarnings = [];
+  const consoleErrorsArr = [];
+  const resourceErrorsArr = [];
   const scanTime = getISOTime();
 
   let finalUrl = urlToScan;
@@ -49,10 +49,10 @@ function getISOTime() {
   // Buffer all errors and warnings (filter later)
   page.on('console', msg => {
     const type = msg.type();
-    if (type === 'error' || type === 'warning') {
+    if (type === 'error') {
       const loc = msg.location(); // { url, lineNumber, columnNumber }
   
-      allErrors.push({
+      consoleErrorsArr.push({
         type,
         location: loc.url || 'unknown',
         line: loc.lineNumber ?? 0,
@@ -66,7 +66,7 @@ function getISOTime() {
   page.on('requestfailed', request => {
     const errorText = request.failure()?.errorText || '';
     if (!errorText.includes('ERR_ABORTED')) {
-      allErrors.push({
+      consoleErrorsArr.push({
         type: 'requestFailed',
         message: `${request.url()} - ${errorText}`,
         timestamp: getISOTime(),
@@ -84,17 +84,9 @@ function getISOTime() {
       lastMainFrameResponse = response;
     }
 
-    if (status >= 500) {
-      allErrors.push({
+    if (status >= 400) {
+      resourceErrorsArr.push({
         type: 'resourceResponseError',
-        statusCode: status.toString(),
-        message: `${url} - Status: ${status}`,
-        timestamp: getISOTime(),
-        url,
-      });
-    } else if (status >= 300) {
-      allWarnings.push({
-        type: 'resourceResponseWarning',
         statusCode: status.toString(),
         message: `${url} - Status: ${status}`,
         timestamp: getISOTime(),
@@ -121,7 +113,7 @@ function getISOTime() {
     console.log(`Resolved final URL: ${finalUrl} (status: ${mainResponseStatus})`);
 
   } catch (err) {
-    allErrors.push({
+    consoleErrorsArr.push({
       type: 'navigationError',
       message: err.message,
       timestamp: getISOTime(),
@@ -133,7 +125,7 @@ function getISOTime() {
 
   // Only include errors matching final origin
   const finalOrigin = new URL(finalUrl).origin;
-  const consoleErrors = allErrors.filter(e => new URL(e.url).origin === finalOrigin).map(e => {
+  const consoleErrors = consoleErrorsArr.filter(e => new URL(e.url).origin === finalOrigin).map(e => {
     return {
       errorType: e.type,
       location: e.location,
@@ -145,11 +137,13 @@ function getISOTime() {
     };
   });
 
-  const resourceWarnings = allWarnings.filter(e => new URL(e.url).origin === finalOrigin).map(e => ({
-    warningType: e.type,
+  const resourceErrors = resourceErrorsArr.filter(e => new URL(e.url).origin === finalOrigin).map(e => ({
+    errorType: e.type,
+    location: e.location,
+    line: e.line,
     message: e.message,
     timestamp: e.timestamp,
-    statusCode: e.statusCode,
+    ...(e.statusCode && { statusCode: e.statusCode }),
     url: e.url,
   }));
 
@@ -169,7 +163,7 @@ function getISOTime() {
     scanTime,
     ...(mainResponseStatus && { statusCode: mainResponseStatus }),
     consoleErrors,
-    resourceWarnings,
+    resourceErrors,
   };
 
   fs.writeFileSync(outputPath, JSON.stringify(output, null, 2), 'utf-8');
