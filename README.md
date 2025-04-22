@@ -33,19 +33,11 @@ Writes to `./results/<domain>---<timestamp>.json`
       "message": "Failed to load resource: the server responded with a status of 401 ()",
       "timestamp": "2025-04-22T09:22:39.941Z",
       "url": "https://example.com/"
-    },
-    {
-      "errorType": "warning",
-      "location": "https://example.com/static/index.js",
-      "line": 1569,
-      "message": "some console error",
-      "timestamp": "2025-04-22T09:22:39.942Z",
-      "url": "https://example.com/"
     }
   ],
-  "resourceWarnings": [
+  "resourceErrors": [
     {
-      "warningType": "resourceResponseWarning",
+      "errorType": "resourceResponseError",
       "message": "https://example.com/api/user - Status: 401",
       "timestamp": "2025-04-22T09:22:39.941Z",
       "statusCode": "401",
