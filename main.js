@@ -22,10 +22,18 @@ function getISOTime() {
     process.exit(1);
   }
 
+  const headlessArg = process.argv[3];
+  const isHeadless = !(headlessArg && headlessArg.toLowerCase() === 'headless=false');
+
+  const timeoutArg = process.argv[4];
+  const timeoutMatch = timeoutArg && timeoutArg.match(/^timeout=(\d+)$/);
+  const timeout = timeoutMatch ? parseInt(timeoutMatch[1], 10) : 10000; // default 10000ms
+
   const browser = await chromium.launch({
-      headless: false,  
-      devtools: true, // open the browser’s devtools panel 
+    headless: isHeadless,
+    devtools: !isHeadless,
   });
+  
   
   const context = await browser.newContext();
   const page = await context.newPage();
@@ -102,8 +110,8 @@ function getISOTime() {
       const previousUrl = finalUrl;
       finalUrl = page.url();
 
-      const nav = page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 10000 }).catch(() => null);
-      await Promise.race([nav, page.waitForTimeout(10000)]);
+      const nav = page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: timeout }).catch(() => null);
+      await Promise.race([nav, page.waitForTimeout(timeout)]);
 
       if (finalUrl === previousUrl) break;
     }
