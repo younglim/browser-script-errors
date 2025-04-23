@@ -11,13 +11,13 @@ npx playwright install
 ## How to run
 
 ```
-node main.js https://<your website> headless=false timeout=2000
+node main.js "https://<your website>" headless=false timeout=2000
 ```
-- where headless sets the browser context
-- where timeout in milliseconds to wait for page events and redirects
+- where `headless` sets the browser context
+- where `timeout` in milliseconds to wait for page events and redirects
 
 ## Sample file output 
-Writes to `./results/<domain>---<timestamp>.json`
+Writes to `./results/<domain>--<contextPath>-<timestamp>.json`
 
 ```
 {
