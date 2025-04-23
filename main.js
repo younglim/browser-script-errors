@@ -16,22 +16,27 @@ function getISOTime() {
 }
 
 async function getModifiedUserAgentContext({ headless = true, devtools = false } = {}) {
-  // Step 1: Get default UA using a temp context
-  const tempBrowser = await chromium.launch();
-  const tempContext = await tempBrowser.newContext();
-  const tempPage = await tempContext.newPage();
-  const defaultUA = await tempPage.evaluate(() => navigator.userAgent);
-  await tempBrowser.close();
+  const uaFilePath = path.resolve('.useragent.txt');
 
-  // Step 2: Modify UA if it includes HeadlessChrome
-  const modifiedUA = defaultUA.includes('HeadlessChrome')
-    ? defaultUA.replace('HeadlessChrome', 'Chrome')
-    : defaultUA;
+  let modifiedUA;
+  if (fs.existsSync(uaFilePath)) {
+    modifiedUA = fs.readFileSync(uaFilePath, 'utf-8').trim();
+  } else {
+    const tempBrowser = await chromium.launch();
+    const tempContext = await tempBrowser.newContext();
+    const tempPage = await tempContext.newPage();
+    const defaultUA = await tempPage.evaluate(() => navigator.userAgent);
+    await tempBrowser.close();
 
-  // Step 3: Launch browser with devtools/headless settings
+    modifiedUA = defaultUA.includes('HeadlessChrome')
+      ? defaultUA.replace('HeadlessChrome', 'Chrome')
+      : defaultUA;
+
+    fs.writeFileSync(uaFilePath, modifiedUA + '\n', 'utf-8');
+    console.log(`# Detected and saved modified User-Agent to ${uaFilePath}`);
+  }
+
   const browser = await chromium.launch({ headless, devtools });
-
-  // Step 4: Create a context with the modified UA
   const context = await browser.newContext({ userAgent: modifiedUA });
 
   return { browser, context, userAgent: modifiedUA };
@@ -48,7 +53,7 @@ async function getModifiedUserAgentContext({ headless = true, devtools = false }
 
   // Defaults
   let isHeadless = true;
-  let timeout = 10000;
+  let timeout = 3000;
 
   for (const arg of args.slice(1)) { // Skip URL
     if (/^headless=false$/i.test(arg)) {
@@ -68,6 +73,8 @@ async function getModifiedUserAgentContext({ headless = true, devtools = false }
   const consoleErrorsArr = [];
   const resourceErrorsArr = [];
   const scanTime = getISOTime();
+
+  console.log(`Starting scan at URL: ${urlToScan}`);
 
   let finalUrl = urlToScan;
   let mainResponseStatus = 'unknown';
@@ -129,15 +136,38 @@ async function getModifiedUserAgentContext({ headless = true, devtools = false }
       const previousUrl = finalUrl;
       finalUrl = page.url();
 
-      const nav = page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: timeout }).catch(() => null);
-      await Promise.race([nav, page.waitForTimeout(timeout)]);
-
+      await Promise.race([
+        page.evaluate(timeout => {
+          return new Promise(resolve => {
+            let timer;
+            const observer = new MutationObserver(() => {
+              clearTimeout(timer);
+              observer.disconnect();
+              resolve('mutated');
+            });
+      
+            observer.observe(document, {
+              childList: true,
+              subtree: true,
+              attributes: true,
+              characterData: true,
+            });
+      
+            // fallback timeout
+            timer = setTimeout(() => {
+              observer.disconnect();
+              resolve('timeout');
+            }, timeout);
+          });
+        }, timeout),
+      ]);
+      
       if (finalUrl === previousUrl) break;
     }
 
     await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
     mainResponseStatus = lastMainFrameResponse?.status()?.toString() || 'unknown';
-    console.log(`Resolved final URL: ${finalUrl} (status: ${mainResponseStatus})`);
+    console.log(`Resolved final at URL: ${finalUrl}\nStatus: ${mainResponseStatus}`);
 
   } catch (err) {
     consoleErrorsArr.push({
